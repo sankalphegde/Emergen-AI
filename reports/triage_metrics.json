@@ -1,0 +1,86 @@
+{
+  "config": {
+    "label_strategy": "acuity_le2",
+    "threshold_metric": "f2",
+    "threshold_range": [
+      0.1,
+      0.9,
+      0.05
+    ]
+  },
+  "baseline": {
+    "k=5": {
+      "recall@k": 0.8185206847890671,
+      "precision@k": 1.0
+    },
+    "k=10": {
+      "recall@k": 0.9634302584670232,
+      "precision@k": 1.0
+    },
+    "roc_auc": 0.5245098039215687,
+    "pr_auc": 0.669406225458309,
+    "f1": 0.2823529411764706,
+    "accuracy": 0.4218009478672986
+  },
+  "context": {
+    "best_params": {
+      "model__C": 0.1,
+      "model__penalty": "l2",
+      "model__solver": "lbfgs"
+    },
+    "k=5": {
+      "recall@k": 0.8185206847890671,
+      "precision@k": 1.0
+    },
+    "k=10": {
+      "recall@k": 0.9634302584670232,
+      "precision@k": 1.0
+    },
+    "best_threshold": 0.15000000000000002,
+    "best_threshold_score": 0.89179548156956,
+    "roc_auc": 0.5083333333333333,
+    "pr_auc": 0.6752290687084201,
+    "f1": 0.7884057971014493,
+    "f2": 0.9030544488711819,
+    "accuracy": 0.6540284360189573
+  },
+  "graph": {
+    "best_params": {
+      "C": 1.0,
+      "penalty": "l2",
+      "solver": "lbfgs"
+    },
+    "k=5": {
+      "recall@k": 0.8185206847890671,
+      "precision@k": 1.0
+    },
+    "k=10": {
+      "recall@k": 0.9634302584670232,
+      "precision@k": 1.0
+    },
+    "best_threshold": 0.1,
+    "best_threshold_score": 0.806845965770171,
+    "roc_auc": 0.4072549019607843,
+    "pr_auc": 0.5629279703575696,
+    "f1": 0.7368421052631579,
+    "f2": 0.8139534883720929,
+    "accuracy": 0.5971563981042654
+  },
+  "pairwise": {
+    "k=5": {
+      "recall@k": 0.8185206847890671,
+      "precision@k": 1.0
+    },
+    "k=10": {
+      "recall@k": 0.9634302584670232,
+      "precision@k": 1.0
+    },
+    "best_threshold": 0.1,
+    "best_threshold_score": 0.0,
+    "roc_auc": 0.5,
+    "pr_auc": 0.6445497630331753,
+    "f1": 0.0,
+    "f2": 0.0,
+    "accuracy": 0.35545023696682465
+  }
+}
