@@ -1,42 +1,58 @@
 # Emergen-AI
-Predicting patient urgency through emergent data patterns
+Emergency department triage recommendation system built for IE7275 (Data Mining in Engineering, Spring 2026).
 
-## Project Overview
-This project builds an emergency department triage recommendation system using the MIMIC-IV ED dataset.
-We frame triage as a ranking problem and compare:
-- Rule-based baseline
-- Context-aware model
-- Graph-based model
-- Pairwise learning-to-rank model
+## Problem
+Prioritize incoming ED visits by criticality so high-risk patients are surfaced earlier for treatment decisions.
 
-## Repo Structure
-- `src/`: pipeline scripts
-- `data/`: raw and processed datasets (not tracked)
-- `reports/`: EDA + metrics outputs (not tracked)
+## Dataset
+This project uses MIMIC-IV ED tables (credentialed access required via PhysioNet):
+- `triage.csv`
+- `vitalsign.csv`
+- `edstays.csv`
+- `diagnosis.csv`
+- `medrecon.csv`
+- `pyxis.csv`
 
-## How to Run
-1. Preprocess & merge:
+Place raw files under `data/raw/` before running the pipeline.
+
+## Models Compared
+- Rule-based baseline triage recommender
+- Context-aware logistic regression recommender
+- Graph-based recommender (patient-attribute embeddings)
+- Pairwise learning-to-rank recommender
+
+## Repository Layout
+- `src/` - preprocessing, EDA, and modeling pipelines
+- `data/` - raw/processed data (large files are excluded from GitHub)
+- `reports/` - metrics, figures, report drafts, and final PDFs
+- `notebooks/` - submission notebook
+
+## Quickstart
+Run from repo root:
+
 ```bash
 python src/data_preprocessing.py
-```
-
-2. Feature engineering:
-```bash
 python src/feature_engineering.py
-```
-
-3. EDA visualizations:
-```bash
 python src/eda_visualization.py
-```
-
-4. Model training + evaluation:
-```bash
 python src/triage_pipeline.py
 ```
 
-## Key Outputs
-- `reports/eda/eda_report.pdf`
+## Optional Runtime Controls
+Useful for quick iteration on smaller subsets:
+
+```bash
+FAST_MODE=1 CONTEXT_MAX_ROWS=120000 PIPELINE_MAX_ROWS=400000 python src/triage_pipeline.py
+```
+
+## Main Outputs
 - `reports/triage_metrics.json`
 - `reports/model_selection_context.png`
 - `reports/model_selection_graph.png`
+- `reports/eda/eda_report.pdf`
+- `reports/ER_Triage_Report_Final.pdf`
+- `reports/ER_Triage_Report_VisualDraft.pdf`
+- `notebooks/triage_recommender.ipynb`
+
+## Notes
+- GitHub rejects files larger than 100MB. Processed data files are kept locally and not pushed.
+- Final report metrics should match your Colab run outputs when Colab is the source of truth.
