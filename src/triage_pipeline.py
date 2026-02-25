@@ -5,11 +5,13 @@ from typing import Dict, List, Tuple
 
 import numpy as np
 import pandas as pd
+from scipy import sparse
 from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import GridSearchCV
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
+from sklearn.decomposition import TruncatedSVD
 from sklearn.metrics import classification_report, roc_auc_score, average_precision_score, f1_score, accuracy_score
 import matplotlib.pyplot as plt
 
@@ -28,6 +30,7 @@ class Config:
     threshold_min: float = 0.1
     threshold_max: float = 0.9
     threshold_step: float = 0.05
+    mf_factors: int = 16
 
 
 def load_data(path: str) -> pd.DataFrame:
@@ -200,6 +203,28 @@ def evaluate_at_k(df: pd.DataFrame, score_col: str, label_col: str, group_col: s
     }
 
 
+def evaluate_ndcg_at_k(df: pd.DataFrame, score_col: str, label_col: str, group_col: str, k: int) -> Dict[str, float]:
+    """
+    Compute NDCG@k on grouped rankings with binary relevance labels.
+    """
+    ndcgs = []
+    discounts = 1.0 / np.log2(np.arange(2, k + 2))
+    for _, group in df.groupby(group_col):
+        labels = group[label_col].values
+        if labels.sum() == 0:
+            continue
+        ranked = group.sort_values(score_col, ascending=False)
+        rel = ranked[label_col].values[:k].astype(float)
+        dcg = np.sum((2 ** rel - 1) * discounts[: len(rel)])
+        ideal_rel = np.sort(labels)[::-1][:k].astype(float)
+        idcg = np.sum((2 ** ideal_rel - 1) * discounts[: len(ideal_rel)])
+        if idcg > 0:
+            ndcgs.append(dcg / idcg)
+    if not ndcgs:
+        return {"ndcg@k": 0.0}
+    return {"ndcg@k": float(np.mean(ndcgs))}
+
+
 def fbeta_score_safe(y_true: np.ndarray, y_pred: np.ndarray, beta: float = 2.0) -> float:
     tp = np.sum((y_true == 1) & (y_pred == 1))
     fp = np.sum((y_true == 0) & (y_pred == 1))
@@ -264,6 +289,8 @@ def build_pairwise_dataset(
         for p, n in pairs:
             X_list.append(p[feature_cols].values - n[feature_cols].values)
             y_list.append(1)
+            X_list.append(n[feature_cols].values - p[feature_cols].values)
+            y_list.append(0)
     if not X_list:
         return np.empty((0, len(feature_cols))), np.empty((0,))
     return np.vstack(X_list), np.array(y_list)
@@ -299,15 +326,91 @@ def score_pairwise(
     return model.decision_function(X)
 
 
+def train_matrix_factorization_model(train: pd.DataFrame, n_factors: int = 16) -> Dict[str, object]:
+    """
+    Matrix-factorization style recommender over (subject_id, chiefcomplaint)
+    interactions with implicit criticality signal.
+    """
+    mf_df = train[["subject_id", "chiefcomplaint", "is_critical"]].copy()
+    mf_df["chiefcomplaint"] = mf_df["chiefcomplaint"].astype("string").fillna("UNKNOWN").astype(str)
+    user_vals = mf_df["subject_id"].astype(str).values
+    item_vals = mf_df["chiefcomplaint"].values
+    user_codes, user_uniques = pd.factorize(user_vals, sort=True)
+    item_codes, item_uniques = pd.factorize(item_vals, sort=True)
+    data = mf_df["is_critical"].astype(float).values
+    mat = sparse.csr_matrix((data, (user_codes, item_codes)), shape=(len(user_uniques), len(item_uniques)))
+    if min(mat.shape) <= 2:
+        return {
+            "user_to_idx": {u: i for i, u in enumerate(user_uniques)},
+            "item_to_idx": {i: j for j, i in enumerate(item_uniques)},
+            "user_factors": np.zeros((len(user_uniques), 1)),
+            "item_factors": np.zeros((len(item_uniques), 1)),
+            "user_bias": np.zeros(len(user_uniques)),
+            "item_bias": np.zeros(len(item_uniques)),
+            "global_mean": float(np.mean(data) if len(data) else 0.5),
+            "n_factors": 1,
+        }
+    k = max(2, min(n_factors, min(mat.shape) - 1))
+    svd = TruncatedSVD(n_components=k, random_state=42)
+    user_factors = svd.fit_transform(mat)
+    item_factors = svd.components_.T
+    global_mean = float(np.mean(data) if len(data) else 0.5)
+    user_bias = np.asarray(mat.mean(axis=1)).ravel() - global_mean
+    item_bias = np.asarray(mat.mean(axis=0)).ravel() - global_mean
+    return {
+        "user_to_idx": {u: i for i, u in enumerate(user_uniques)},
+        "item_to_idx": {i: j for j, i in enumerate(item_uniques)},
+        "user_factors": user_factors,
+        "item_factors": item_factors,
+        "user_bias": user_bias,
+        "item_bias": item_bias,
+        "global_mean": global_mean,
+        "n_factors": k,
+    }
+
+
+def score_matrix_factorization(df: pd.DataFrame, mf_model: Dict[str, object]) -> np.ndarray:
+    score = np.full(len(df), mf_model["global_mean"], dtype=float)
+    users = df["subject_id"].astype(str).map(mf_model["user_to_idx"])
+    items = df["chiefcomplaint"].astype("string").fillna("UNKNOWN").astype(str).map(mf_model["item_to_idx"])
+    user_known = users.notna().values
+    item_known = items.notna().values
+    both_known = user_known & item_known
+    if user_known.any():
+        u_idx = users[user_known].astype(int).values
+        score[user_known] += mf_model["user_bias"][u_idx]
+    if item_known.any():
+        i_idx = items[item_known].astype(int).values
+        score[item_known] += mf_model["item_bias"][i_idx]
+    if both_known.any():
+        b_idx = np.where(both_known)[0]
+        u_idx = users.iloc[b_idx].astype(int).values
+        i_idx = items.iloc[b_idx].astype(int).values
+        score[b_idx] += np.sum(
+            mf_model["user_factors"][u_idx] * mf_model["item_factors"][i_idx],
+            axis=1,
+        )
+    # Convert to [0,1] probability-like score for threshold search.
+    score = 1.0 / (1.0 + np.exp(-np.clip(score, -20, 20)))
+    return score
+
+
 def train_context_model(
     train: pd.DataFrame,
     test: pd.DataFrame,
     feature_cols: List[str],
     cat_cols: List[str],
 ) -> Tuple[pd.DataFrame, pd.DataFrame, Pipeline, Dict[str, float], Dict[str, np.ndarray]]:
-    X_train = train[feature_cols + cat_cols]
+    X_train = train[feature_cols + cat_cols].copy()
     y_train = train["is_critical"]
-    X_test = test[feature_cols + cat_cols]
+    X_test = test[feature_cols + cat_cols].copy()
+
+    # Ensure categorical columns are uniformly string-typed for OneHotEncoder
+    for col in cat_cols:
+        if col in X_train.columns:
+            X_train[col] = X_train[col].astype("string").fillna("UNKNOWN")
+        if col in X_test.columns:
+            X_test[col] = X_test[col].astype("string").fillna("UNKNOWN")
 
     preprocessor = ColumnTransformer(
         transformers=[
@@ -324,6 +427,16 @@ def train_context_model(
         "model__penalty": ["l2"],
         "model__solver": ["lbfgs"],
     }
+    # Optional: sample for faster grid search on very large datasets
+    sample_n = int(os.getenv("CONTEXT_MAX_ROWS", "0"))
+    if sample_n > 0 and len(X_train) > sample_n:
+        sample_idx = X_train.sample(n=sample_n, random_state=42).index
+        X_grid = X_train.loc[sample_idx]
+        y_grid = y_train.loc[sample_idx]
+    else:
+        X_grid = X_train
+        y_grid = y_train
+
     grid = GridSearchCV(
         clf,
         param_grid=param_grid,
@@ -331,13 +444,17 @@ def train_context_model(
         cv=3,
         n_jobs=1,
     )
-    grid.fit(X_train, y_train)
-    clf = grid.best_estimator_
+    grid.fit(X_grid, y_grid)
+    # Refit best params on full training data
+    best_params = grid.best_params_
+    clf = Pipeline(steps=[("pre", preprocessor), ("model", base_model)])
+    clf.set_params(**best_params)
+    clf.fit(X_train, y_train)
     test = test.copy()
     test["context_score"] = clf.predict_proba(X_test)[:, 1]
     train = train.copy()
     train["context_score"] = clf.predict_proba(X_train)[:, 1]
-    return train, test, clf, grid.best_params_, grid.cv_results_
+    return train, test, clf, best_params, grid.cv_results_
 
 
 def build_graph_embeddings(df: pd.DataFrame, dim: int = 16) -> pd.DataFrame:
@@ -439,9 +556,14 @@ def plot_model_selection(cv_results: Dict[str, np.ndarray], title: str, out_path
 
 def main():
     cfg = Config()
+    fast_mode = os.getenv("FAST_MODE", "0") == "1"
+    max_rows = int(os.getenv("PIPELINE_MAX_ROWS", "0"))
 
     # Step 1: Load data
     df = load_data(cfg.data_path)
+    if max_rows > 0 and len(df) > max_rows:
+        # Keep temporal realism while capping runtime for experimentation runs.
+        df = df.sort_values(cfg.time_col).tail(max_rows).copy()
 
     # Step 2: Unify vitals + time features
     df = unify_vitals(df)
@@ -475,42 +597,62 @@ def main():
         "arrival_hour", "arrival_day"
     ]
     categorical_features = ["gender", "race", "arrival_transport", "chiefcomplaint"]
+    for col in categorical_features:
+        if col in train.columns:
+            train[col] = train[col].astype("string").fillna("UNKNOWN")
+        if col in val.columns:
+            val[col] = val[col].astype("string").fillna("UNKNOWN")
+        if col in test.columns:
+            test[col] = test[col].astype("string").fillna("UNKNOWN")
     train, test, context_model, context_params, context_cv = train_context_model(
         train, test, numeric_features, categorical_features
     )
     # Score validation set for threshold tuning
-    X_val = val[numeric_features + categorical_features]
+    X_val = val[numeric_features + categorical_features].copy()
     val["context_score"] = context_model.predict_proba(X_val)[:, 1]
 
-    # Step 9: Graph-based model
-    emb_df = build_graph_embeddings(df)
-    base_graph_cols = ["temperature", "heartrate", "resprate", "o2sat", "sbp", "dbp", "congestion_score"]
-    train, test, graph_model, graph_params, graph_cv = train_graph_model(
-        train, test, emb_df, base_graph_cols
-    )
-    val = val.copy()
-    val["patient_id"] = val["stay_id"].astype(str)
-    val = val.merge(emb_df, on="patient_id", how="left")
-    emb_cols = [c for c in val.columns if c.startswith("emb_")]
-    val_graph_features = base_graph_cols + emb_cols
-    X_val_graph = val[val_graph_features].fillna(0)
-    if graph_model is not None:
-        graph_scaler, graph_clf = graph_model
-        X_val_graph_scaled = graph_scaler.transform(X_val_graph)
-        val["graph_score"] = graph_clf.predict_proba(X_val_graph_scaled)[:, 1]
-    else:
-        val["graph_score"] = 0.0
+    # Step 8b: Matrix factorization recommender
+    mf_model = train_matrix_factorization_model(train, cfg.mf_factors)
+    val["mf_score"] = score_matrix_factorization(val, mf_model)
+    test["mf_score"] = score_matrix_factorization(test, mf_model)
 
-    # Step 9b: Pairwise ranking model (numeric features only)
-    pairwise_features = [
-        "temperature", "heartrate", "resprate", "o2sat", "sbp", "dbp",
-        "shock_index", "pulse_pressure", "complexity_score",
-        "congestion_score", "active_patients", "wait_time_proxy",
-        "arrival_hour", "arrival_day",
-    ]
-    scaler, pairwise_model = train_pairwise_ranker(train, val, pairwise_features, "arrival_hour_bucket")
-    val["pairwise_score"] = score_pairwise(val, pairwise_features, scaler, pairwise_model)
-    test["pairwise_score"] = score_pairwise(test, pairwise_features, scaler, pairwise_model)
+    # Step 9: Graph-based model
+    if not fast_mode:
+        emb_df = build_graph_embeddings(df)
+        base_graph_cols = ["temperature", "heartrate", "resprate", "o2sat", "sbp", "dbp", "congestion_score"]
+        train, test, graph_model, graph_params, graph_cv = train_graph_model(
+            train, test, emb_df, base_graph_cols
+        )
+        val = val.copy()
+        val["patient_id"] = val["stay_id"].astype(str)
+        val = val.merge(emb_df, on="patient_id", how="left")
+        emb_cols = [c for c in val.columns if c.startswith("emb_")]
+        val_graph_features = base_graph_cols + emb_cols
+        X_val_graph = val[val_graph_features].fillna(0)
+        if graph_model is not None:
+            graph_scaler, graph_clf = graph_model
+            X_val_graph_scaled = graph_scaler.transform(X_val_graph)
+            val["graph_score"] = graph_clf.predict_proba(X_val_graph_scaled)[:, 1]
+        else:
+            val["graph_score"] = 0.0
+
+        # Step 9b: Pairwise ranking model (numeric features only)
+        pairwise_features = [
+            "temperature", "heartrate", "resprate", "o2sat", "sbp", "dbp",
+            "shock_index", "pulse_pressure", "complexity_score",
+            "congestion_score", "active_patients", "wait_time_proxy",
+            "arrival_hour", "arrival_day",
+        ]
+        scaler, pairwise_model = train_pairwise_ranker(train, val, pairwise_features, "arrival_hour_bucket")
+        val["pairwise_score"] = score_pairwise(val, pairwise_features, scaler, pairwise_model)
+        test["pairwise_score"] = score_pairwise(test, pairwise_features, scaler, pairwise_model)
+    else:
+        graph_params = {}
+        graph_cv = {"params": [], "mean_test_score": []}
+        val["graph_score"] = 0.0
+        test["graph_score"] = 0.0
+        val["pairwise_score"] = 0.0
+        test["pairwise_score"] = 0.0
 
     # Step 10: Evaluate ranking metrics
     metrics = {
@@ -521,15 +663,22 @@ def main():
         },
         "baseline": {},
         "context": {"best_params": context_params},
+        "matrix_factorization": {"best_params": {"n_factors": mf_model["n_factors"]}},
         "graph": {"best_params": graph_params},
         "pairwise": {},
     }
     group_col = "arrival_hour_bucket"
     for k in cfg.k_values:
         metrics["baseline"][f"k={k}"] = evaluate_at_k(test, "rule_score", "is_critical", group_col, k)
+        metrics["baseline"][f"ndcg@{k}"] = evaluate_ndcg_at_k(test, "rule_score", "is_critical", group_col, k)
         metrics["context"][f"k={k}"] = evaluate_at_k(test, "context_score", "is_critical", group_col, k)
+        metrics["context"][f"ndcg@{k}"] = evaluate_ndcg_at_k(test, "context_score", "is_critical", group_col, k)
+        metrics["matrix_factorization"][f"k={k}"] = evaluate_at_k(test, "mf_score", "is_critical", group_col, k)
+        metrics["matrix_factorization"][f"ndcg@{k}"] = evaluate_ndcg_at_k(test, "mf_score", "is_critical", group_col, k)
         metrics["graph"][f"k={k}"] = evaluate_at_k(test, "graph_score", "is_critical", group_col, k)
+        metrics["graph"][f"ndcg@{k}"] = evaluate_ndcg_at_k(test, "graph_score", "is_critical", group_col, k)
         metrics["pairwise"][f"k={k}"] = evaluate_at_k(test, "pairwise_score", "is_critical", group_col, k)
+        metrics["pairwise"][f"ndcg@{k}"] = evaluate_ndcg_at_k(test, "pairwise_score", "is_critical", group_col, k)
 
     # Step 10b: Threshold tuning for critical-prioritized classification
     val_true = val["is_critical"].values
@@ -559,6 +708,16 @@ def main():
     )
     metrics["context"]["best_threshold"] = ctx_t
     metrics["context"]["best_threshold_score"] = ctx_val_score
+    mf_t, mf_val_score = find_best_threshold(
+        val["mf_score"].values,
+        val_true,
+        cfg.threshold_metric,
+        cfg.threshold_min,
+        cfg.threshold_max,
+        cfg.threshold_step,
+    )
+    metrics["matrix_factorization"]["best_threshold"] = mf_t
+    metrics["matrix_factorization"]["best_threshold_score"] = mf_val_score
     metrics["graph"]["best_threshold"] = g_t
     metrics["graph"]["best_threshold_score"] = g_val_score
     metrics["pairwise"]["best_threshold"] = p_t
@@ -581,6 +740,16 @@ def main():
     )
     metrics["context"]["accuracy"] = float(
         accuracy_score(y_true, (test["context_score"] > ctx_t).astype(int))
+    )
+
+    metrics["matrix_factorization"]["roc_auc"] = float(roc_auc_score(y_true, test["mf_score"]))
+    metrics["matrix_factorization"]["pr_auc"] = float(average_precision_score(y_true, test["mf_score"]))
+    metrics["matrix_factorization"]["f1"] = float(f1_score(y_true, (test["mf_score"] > mf_t).astype(int)))
+    metrics["matrix_factorization"]["f2"] = float(
+        fbeta_score_safe(y_true, (test["mf_score"] > mf_t).astype(int), beta=2.0)
+    )
+    metrics["matrix_factorization"]["accuracy"] = float(
+        accuracy_score(y_true, (test["mf_score"] > mf_t).astype(int))
     )
 
     metrics["graph"]["roc_auc"] = float(roc_auc_score(y_true, test["graph_score"]))

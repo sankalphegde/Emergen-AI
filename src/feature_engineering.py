@@ -1,3 +1,4 @@
+import os
 import pandas as pd
 import numpy as np
 
@@ -35,8 +36,28 @@ if __name__ == "__main__":
     
     # Cleanup: Replace infinities from division and fill remaining NaNs
     df = df.replace([np.inf, -np.inf], np.nan).fillna(0)
-    
+
+    # Drop datetime columns to speed up CSV writing (features already extracted)
+    datetime_cols = df.select_dtypes(include=["datetime64[ns]", "datetime64[ns, UTC]"]).columns
+    if len(datetime_cols) > 0:
+        df = df.drop(columns=list(datetime_cols))
+
     # Save the 'Model Ready' file
-    df.to_csv('data/processed/model_ready.csv', index=False)
-    print("✅ Feature Engineering Complete. 'model_ready.csv' is ready for training!")
+    output_path = os.getenv("MODEL_READY_PATH", "data/processed/model_ready.csv")
+    output_format = os.getenv("MODEL_READY_FORMAT", "csv").lower()
+    if output_format == "parquet":
+        try:
+            df.to_parquet(output_path, index=False)
+            print(f"✅ Feature Engineering Complete. '{output_path}' is ready for training!")
+        except Exception:
+            output_format = "csv"
+
+    if output_format == "csv":
+        df.to_csv(
+            output_path,
+            index=False,
+            date_format="%Y-%m-%d %H:%M:%S",
+            chunksize=200_000,
+        )
+        print(f"✅ Feature Engineering Complete. '{output_path}' is ready for training!")
     print(f"Engineered columns: ['shock_index', 'pulse_pressure', 'arrival_hour']")

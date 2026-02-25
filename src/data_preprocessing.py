@@ -1,27 +1,54 @@
+import os
 import pandas as pd
 import numpy as np
 
+def _pick_existing_path(candidates):
+    for path in candidates:
+        if os.path.exists(path):
+            return path
+    return None
+
 def load_all_files():
     """
-    Loads all 6 MIMIC-IV ED demo files with exact matching for your directory.
+    Loads all 6 MIMIC-IV ED files. Supports both full and demo filenames.
     """
     # Fixed filenames: 'edstays' (no underscore) and 'vitalsign' (no 's')
     paths = {
-        'triage': 'data/raw/triage_demo.csv',
-        'vitals': 'data/raw/vitalsign_demo.csv',
-        'edstays': 'data/raw/edstays_demo.csv',
-        'diagnosis': 'data/raw/diagnosis_demo.csv',
-        'meds': 'data/raw/medrecon_demo.csv',
-        'pyxis': 'data/raw/pyxis_demo.csv'
+        'triage': _pick_existing_path([
+            'data/raw/triage.csv',
+            'data/raw/triage.csv'
+        ]),
+        'vitals': _pick_existing_path([
+            'data/raw/vitalsign.csv',
+            'data/raw/vitalsign.csv'
+        ]),
+        'edstays': _pick_existing_path([
+            'data/raw/edstays.csv',
+            'data/raw/edstays.csv'
+        ]),
+        'diagnosis': _pick_existing_path([
+            'data/raw/diagnosis.csv',
+            'data/raw/diagnosis.csv'
+        ]),
+        'meds': _pick_existing_path([
+            'data/raw/medrecon.csv',
+            'data/raw/medrecon.csv'
+        ]),
+        'pyxis': _pick_existing_path([
+            'data/raw/pyxis.csv',
+            'data/raw/pyxis.csv'
+        ])
     }
     
     dfs = {}
     for name, path in paths.items():
         try:
+            if path is None:
+                raise FileNotFoundError
             dfs[name] = pd.read_csv(path)
-            print(f"✅ Loaded {name}: {dfs[name].shape}")
+            print(f"Loaded {name}: {dfs[name].shape} from {path}")
         except FileNotFoundError:
-            print(f"❌ Error: Could not find {path}. Verify the file is in data/raw/")
+            print(f"Error: Missing {name} file. Expected in data/raw/")
             
     return dfs
 

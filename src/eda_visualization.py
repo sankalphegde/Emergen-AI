@@ -10,6 +10,9 @@ import seaborn as sns
 
 DATA_PATH = "data/processed/master_dataset.csv"
 OUT_DIR = "reports/eda"
+MAX_ROWS = int(os.getenv("EDA_MAX_ROWS", "200000"))
+PAIRPLOT_MAX_ROWS = int(os.getenv("EDA_PAIRPLOT_MAX_ROWS", "3000"))
+ENABLE_PAIRPLOT = os.getenv("EDA_PAIRPLOT", "0") == "1"
 
 
 def unify_vitals(df: pd.DataFrame) -> pd.DataFrame:
@@ -49,7 +52,7 @@ def save_plot(fig, filename: str, pdf: PdfPages = None):
 
 def plot_distribution(df: pd.DataFrame, col: str, title: str, filename: str, pdf: PdfPages = None):
     fig, ax = plt.subplots(figsize=(7, 4))
-    sns.histplot(df[col].dropna(), kde=True, ax=ax)
+    sns.histplot(df[col].dropna(), kde=True, bins=50, ax=ax)
     ax.set_title(title)
     ax.set_xlabel(col)
     save_plot(fig, filename, pdf)
@@ -110,6 +113,9 @@ def main():
     df = unify_vitals(df)
     df = add_time_features(df, "intime")
 
+    if len(df) > MAX_ROWS:
+        df = df.sample(n=MAX_ROWS, random_state=42)
+
     pdf_path = os.path.join(OUT_DIR, "eda_report.pdf")
     with PdfPages(pdf_path) as pdf:
         # Basic distributions
@@ -149,11 +155,15 @@ def main():
             if col in df.columns:
                 plot_violin_by_acuity(df, col, f"violin_{col}_by_acuity.png", pdf)
 
-    # Pairplot (saved as PNG only to keep PDF size reasonable)
-    pair_cols = ["temperature", "heartrate", "resprate", "o2sat", "sbp", "dbp"]
-    pair_cols = [c for c in pair_cols if c in df.columns]
-    if len(pair_cols) >= 2:
-        plot_pairplot(df, pair_cols, "pairplot_vitals.png")
+    # Pairplot is expensive on large datasets; enable explicitly with EDA_PAIRPLOT=1
+    if ENABLE_PAIRPLOT:
+        pair_cols = ["temperature", "heartrate", "resprate", "o2sat", "sbp", "dbp"]
+        pair_cols = [c for c in pair_cols if c in df.columns]
+        if len(pair_cols) >= 2:
+            pp_df = df[pair_cols].dropna()
+            if len(pp_df) > PAIRPLOT_MAX_ROWS:
+                pp_df = pp_df.sample(n=PAIRPLOT_MAX_ROWS, random_state=42)
+            plot_pairplot(pp_df, pair_cols, "pairplot_vitals.png")
 
     # Summary table
     summary = df.describe(include="all").transpose()
