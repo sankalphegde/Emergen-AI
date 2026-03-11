@@ -1,11 +1,11 @@
 # Emergen-AI
-Emergency department triage recommendation system built for IE7275 (Data Mining in Engineering, Spring 2026).
+Emergency department triage recommendation system for IE7275 (Data Mining in Engineering, Spring 2026).
 
-## Problem
-Prioritize incoming ED visits by criticality so high-risk patients are surfaced earlier for treatment decisions.
+## Project Summary
+This project ranks incoming ED visits by clinical risk to support faster prioritization of high‑acuity patients. It integrates multiple MIMIC‑IV ED tables into a visit‑level dataset, performs EDA, trains a baseline and advanced recommenders, and evaluates relevance and discrimination metrics.
 
 ## Dataset
-This project uses MIMIC-IV ED tables (credentialed access required via PhysioNet):
+MIMIC‑IV ED (credentialed access required via PhysioNet). Raw inputs expected under `data/raw/`:
 - `triage.csv`
 - `vitalsign.csv`
 - `edstays.csv`
@@ -13,22 +13,27 @@ This project uses MIMIC-IV ED tables (credentialed access required via PhysioNet
 - `medrecon.csv`
 - `pyxis.csv`
 
-Place raw files under `data/raw/` before running the pipeline.
+## Models Implemented
+- Rule‑based baseline triage recommender
+- Context‑aware logistic regression
+- Graph‑based recommender (patient‑attribute embeddings)
+- Pairwise learning‑to‑rank model
 
-## Models Compared
-- Rule-based baseline triage recommender
-- Context-aware logistic regression recommender
-- Graph-based recommender (patient-attribute embeddings)
-- Pairwise learning-to-rank recommender
+## Evaluation Metrics
+Precision@k, Recall@k, ROC‑AUC, PR‑AUC, F1, F2, Accuracy. Thresholds are selected on validation data (F2‑oriented).
+
+## Deliverables
+- PDF report: `reports/ER_Triage_Report_VisualDraft.pdf`
+- Submission notebook: `notebooks/ER_Triage_Submission_Final.ipynb`
 
 ## Repository Layout
-- `src/` - preprocessing, EDA, and modeling pipelines
-- `data/` - raw/processed data (large files are excluded from GitHub)
-- `reports/` - metrics, figures, report drafts, and final PDFs
-- `notebooks/` - submission notebook
+- `src/` - preprocessing, feature engineering, EDA, modeling
+- `data/` - raw/processed data (large files excluded from GitHub)
+- `reports/` - figures, metrics, report PDF
+- `notebooks/` - submission notebooks
 
-## Quickstart
-Run from repo root:
+## Run Pipeline (Local)
+From repo root:
 
 ```bash
 python src/data_preprocessing.py
@@ -37,22 +42,6 @@ python src/eda_visualization.py
 python src/triage_pipeline.py
 ```
 
-## Optional Runtime Controls
-Useful for quick iteration on smaller subsets:
-
-```bash
-FAST_MODE=1 CONTEXT_MAX_ROWS=120000 PIPELINE_MAX_ROWS=400000 python src/triage_pipeline.py
-```
-
-## Main Outputs
-- `reports/triage_metrics.json`
-- `reports/model_selection_context.png`
-- `reports/model_selection_graph.png`
-- `reports/eda/eda_report.pdf`
-- `reports/ER_Triage_Report_Final.pdf`
-- `reports/ER_Triage_Report_VisualDraft.pdf`
-- `notebooks/triage_recommender.ipynb`
-
 ## Notes
-- GitHub rejects files larger than 100MB. Processed data files are kept locally and not pushed.
-- Final report metrics should match your Colab run outputs when Colab is the source of truth.
+- Processed datasets are not committed due to GitHub size limits and data access restrictions.
+- The submission notebook is meant to be run locally where the raw data is available.
